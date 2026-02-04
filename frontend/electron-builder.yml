@@ -36,9 +36,9 @@ nsis:
   include: build/installer.nsh
 mac:
   extraResources:
-    - from: externals/python/window_inspector/dist/window_inspector/window_inspector
+    - from: externals/python/window_inspector/dist/window_inspector
       to: bin/window_inspector
-    - from: externals/python/window_capture/dist/window_capture/window_capture
+    - from: externals/python/window_capture/dist/window_capture
       to: bin/window_capture
   entitlementsInherit: build/entitlements.mac.plist
   icon: build/icon.icns

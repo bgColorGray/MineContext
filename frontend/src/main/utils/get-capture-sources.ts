@@ -4,12 +4,29 @@
 import { app, desktopCapturer, DesktopCapturerSource, systemPreferences } from 'electron'
 import screenshot from 'screenshot-desktop'
 import { exec, spawn } from 'node:child_process'
+import fs from 'node:fs'
 import { promisify } from 'node:util'
 import { getLogger } from '@shared/logger/main'
 import { FinalWindowInfo, getAllWindows } from './mac-window-manager'
 import { NativeCaptureHelper } from './native-capture-helper'
 import path from 'node:path'
 const logger = getLogger('ScreenshotService')
+
+const resolveDevPythonToolDir = (toolName: string) => {
+  const candidates = [
+    path.join(process.cwd(), 'externals', 'python', toolName, 'dist', toolName),
+    path.join(process.cwd(), 'frontend', 'externals', 'python', toolName, 'dist', toolName),
+    path.join(__dirname, '../..', 'externals', 'python', toolName, 'dist', toolName)
+  ]
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  return candidates[0]
+}
 
 /**
  * @interface CaptureSource
@@ -448,14 +465,23 @@ class CaptureSourcesTools {
               logger.log(`[Python Capture] Capturing window ${targetWindow.windowId} for app ${appName}`)
               try {
                 const captureResult = await new Promise(async (resolve, reject) => {
+                  // In packaged apps, extraResources copies the executable to:
+                  //   `${process.resourcesPath}/bin/window_capture/`
+                  // In dev, the executable lives in:
+                  //   `externals/python/window_capture/dist/window_capture/`
                   const basePath = app.isPackaged
                     ? path.join(process.resourcesPath, 'bin', 'window_capture')
-                    : path.join(__dirname, '../..', 'externals/python/window_capture/dist', 'window_capture')
-                  const exePath = path.join(basePath, 'window_capture')
+                    : resolveDevPythonToolDir('window_capture')
+
+                  // Support both layouts:
+                  // - folder layout: <basePath>/window_capture
+                  // - flat layout (legacy): <basePath>
+                  const nestedExePath = path.join(basePath, 'window_capture')
+                  const exePath = fs.existsSync(nestedExePath) ? nestedExePath : basePath
                   const py = spawn(exePath, [
                     JSON.stringify({
-                      appName: 'Notion',
-                      windowId: 67890
+                      appName,
+                      windowId: targetWindow.windowId
                     })
                   ])
 

@@ -27,10 +27,11 @@ fi
 
 # 3. Install PyInstaller if not present
 if [ "$USE_UV" = true ]; then
-    # Use uv run to ensure detection within the uv-managed virtual environment
+    # Use `uv run` to ensure we operate inside the project virtual environment.
+    # Do NOT use `uv pip install` without `--python`, as it may target system Python.
     if ! uv run python -c "import PyInstaller" 2>/dev/null; then
         echo "--> PyInstaller not found (uv env). Installing..."
-        uv pip install pyinstaller
+        uv pip install --python "$(pwd)/.venv/bin/python" pyinstaller
     fi
 else
     if ! python3 -c "import PyInstaller" 2>/dev/null; then
@@ -46,7 +47,7 @@ rm -rf dist/ build/
 # 5. Run PyInstaller build
 echo "--> Starting application build with PyInstaller..."
 if [ "$USE_UV" = true ]; then
-    uv run pyinstaller --clean --noconfirm --log-level INFO opencontext.spec
+    uv run python -m PyInstaller --clean --noconfirm --log-level INFO opencontext.spec
 else
     pyinstaller --clean --noconfirm --log-level INFO opencontext.spec
 fi

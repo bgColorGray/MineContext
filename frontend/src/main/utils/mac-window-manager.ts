@@ -4,6 +4,7 @@
 import { spawn } from 'child_process'
 import { app } from 'electron'
 
+import fs from 'node:fs'
 import * as path from 'path'
 import { getLogger } from '@shared/logger/main'
 const logger = getLogger('mac-window-manager')
@@ -51,6 +52,22 @@ export interface FinalWindowInfo {
 
 // --- Private Helper Functions ---
 
+const resolveDevPythonToolDir = (toolName: string) => {
+  const candidates = [
+    path.join(process.cwd(), 'externals', 'python', toolName, 'dist', toolName),
+    path.join(process.cwd(), 'frontend', 'externals', 'python', toolName, 'dist', toolName),
+    path.join(__dirname, '../..', 'externals', 'python', toolName, 'dist', toolName)
+  ]
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  return candidates[0]
+}
+
 /**
  * Executes a Python script that uses the Quartz framework to get detailed information
  * about all windows, including those on other spaces or minimized.
@@ -58,10 +75,19 @@ export interface FinalWindowInfo {
  */
 const getWindowsWithRealIds = (): Promise<QuartzWindowInfo[]> => {
   return new Promise((resolve, reject) => {
+    // In packaged apps, extraResources copies the folder to:
+    //   `${process.resourcesPath}/bin/window_inspector/`
+    // In dev, the folder lives in:
+    //   `externals/python/window_inspector/dist/window_inspector/`
     const basePath = app.isPackaged
       ? path.join(process.resourcesPath, 'bin', 'window_inspector')
-      : path.join(__dirname, '../..', 'externals/python/window_inspector/dist', 'window_inspector')
-    const exePath = path.join(basePath, 'window_inspector')
+      : resolveDevPythonToolDir('window_inspector')
+
+    // Support both layouts:
+    // - folder layout: <basePath>/window_inspector
+    // - flat layout (legacy): <basePath>
+    const nestedExePath = path.join(basePath, 'window_inspector')
+    const exePath = fs.existsSync(nestedExePath) ? nestedExePath : basePath
     const py = spawn(exePath)
 
     let output = ''
@@ -69,6 +95,7 @@ const getWindowsWithRealIds = (): Promise<QuartzWindowInfo[]> => {
 
     py.stdout.on('data', (data) => (output += data.toString()))
     py.stderr.on('data', (data) => (error += data.toString()))
+    py.on('error', reject)
 
     py.on('close', (code) => {
       if (code === 0 && output) {
