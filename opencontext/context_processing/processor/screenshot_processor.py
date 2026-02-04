@@ -327,19 +327,29 @@ class ScreenshotProcessor(BaseContextProcessor):
             items_by_type.setdefault(context_type, []).append(item)
 
         tasks = []
+        task_context_types: List[ContextType] = []
         for context_type, new_items in items_by_type.items():
             cached_items = list(self._processed_cache.get(context_type.value, {}).values())
             tasks.append(self._merge_items_with_llm(context_type, new_items, cached_items))
+            task_context_types.append(context_type)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         all_newly_created = []
         for idx, result in enumerate(results):
+            task_context_type = (
+                task_context_types[idx] if idx < len(task_context_types) else None
+            )
+            task_context_type_value = (
+                task_context_type.value if task_context_type is not None else "unknown"
+            )
             if isinstance(result, Exception):
-                logger.error(f"Merge task {idx} failed with error: {result} for context type: {context_type.value}")
+                logger.error(
+                    f"Merge task {idx} failed for context type {task_context_type_value}: {result}"
+                )
                 continue
             if result:
-                context_type = result.get("context_type")
+                context_type = result.get("context_type", task_context_type_value)
                 all_newly_created.extend(result.get("processed_contexts", []))
                 self._processed_cache[context_type] = result.get("new_ctxs", {})
                 for item_id in result.get("need_to_del_ids", []):
@@ -383,7 +393,7 @@ class ScreenshotProcessor(BaseContextProcessor):
         need_to_del_ids = []
         final_context = None
         new_ctxs = {}
-        entity_refresh_items = []
+        entity_refresh_items: List[Tuple[ProcessedContext, List[Dict[str, Any]]]] = []
         for result in response_data.get("items", []):
             merge_type = result.get("merge_type")
             data = result.get("data", {})
@@ -447,16 +457,15 @@ class ScreenshotProcessor(BaseContextProcessor):
                     continue
                 final_context = all_items_map[merged_ids[0]]
             new_ctxs[final_context.id] = final_context
-            entity_refresh_items.append(final_context)
+            entity_refresh_items.append((final_context, data.get("entities", [])))
 
         # Second pass: parallel refresh entities
         entity_tasks = [
-            self._parse_single_context(item, data.get("entities", []))
-            for item in entity_refresh_items
+            self._parse_single_context(item, entities) for item, entities in entity_refresh_items
         ]
         # Execute all entity refresh tasks in parallel
         entities_results = await asyncio.gather(*entity_tasks, return_exceptions=True)
-        for entities_result in entities_results:
+        for (item, _), entities_result in zip(entity_refresh_items, entities_results):
             if isinstance(entities_result, Exception):
                 logger.error(f"Entity refresh failed for context {item.id}: {entities_result}")
             else:

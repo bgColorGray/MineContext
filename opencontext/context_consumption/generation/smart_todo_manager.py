@@ -209,7 +209,18 @@ class SmartTodoManager:
                     all_contexts.extend(context_list)
 
             # Sort by time, with the newest first
-            all_contexts.sort(key=lambda x: x.properties.create_time, reverse=True)
+            def _sort_key(ctx) -> float:
+                dt = getattr(ctx.properties, "create_time", None)
+                if not dt:
+                    return 0.0
+                # Avoid "can't compare offset-naive and offset-aware datetimes" by
+                # sorting on numeric timestamps instead of datetime objects.
+                try:
+                    return float(dt.timestamp())
+                except Exception:
+                    return 0.0
+
+            all_contexts.sort(key=_sort_key, reverse=True)
             logger.info(
                 f"Retrieved {len(all_contexts)} context records relevant to task identification."
             )
