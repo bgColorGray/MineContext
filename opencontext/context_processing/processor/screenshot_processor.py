@@ -291,13 +291,26 @@ class ScreenshotProcessor(BaseContextProcessor):
 
         raw_resp = parse_json_from_response(raw_llm_response)
         if not raw_resp:
-            logger.error(f"Empty VLM response.")
-            raise ValueError(f"Empty VLM response.")
-        
-        items = raw_resp.get("items", [])
-        processed_items = []
-        for item in items:
-            processed_items.append(self._create_processed_context(item, raw_context))
+            logger.error("Empty VLM response.")
+            raise ValueError("Empty VLM response.")
+
+        # Some OpenAI-compatible backends/models may return a bare JSON array instead
+        # of the documented object wrapper: {"items": [...]}.
+        if isinstance(raw_resp, list):
+            items = raw_resp
+        elif isinstance(raw_resp, dict):
+            items = raw_resp.get("items", [])
+        else:
+            raise ValueError(f"Invalid VLM response type: {type(raw_resp)}")
+
+        processed_items: List[ProcessedContext] = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                logger.warning(f"Skipping non-dict VLM item: {item}")
+                continue
+            ctx = self._create_processed_context(item, raw_context)
+            if ctx:
+                processed_items.append(ctx)
         return processed_items
 
     async def _merge_contexts(self, processed_items: List[ProcessedContext]) -> List[ProcessedContext]:
@@ -356,6 +369,8 @@ class ScreenshotProcessor(BaseContextProcessor):
             raise ValueError(f"Empty LLM response when merge items for context type: {context_type.value}")
 
         response_data = parse_json_from_response(response)
+        if isinstance(response_data, list):
+            response_data = {"items": response_data}
         if not isinstance(response_data, dict) or "items" not in response_data:
             logger.error(f"merge_items_with_llm, Invalid response format: {response_data}")
             raise ValueError(f"Invalid response format when merge items for context type: {context_type.value}")
