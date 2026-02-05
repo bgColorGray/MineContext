@@ -47,6 +47,7 @@ class GlobalVLMClient:
             with self._lock:
                 if not self._initialized:
                     self._vlm_client: Optional[LLMClient] = None
+                    self._vision_client: Optional[LLMClient] = None
                     self._auto_initialized = False
                     GlobalVLMClient._initialized = True
 
@@ -82,6 +83,9 @@ class GlobalVLMClient:
                 return
 
             self._vlm_client = LLMClient(llm_type=LLMType.CHAT, config=vlm_config)
+            vision_config = get_config("vision_model")
+            if vision_config:
+                self._vision_client = LLMClient(llm_type=LLMType.CHAT, config=vision_config)
             logger.info("GlobalVLMClient auto-initialized successfully")
             self._auto_initialized = True
         except Exception as e:
@@ -90,6 +94,36 @@ class GlobalVLMClient:
 
     def is_initialized(self) -> bool:
         return self._vlm_client is not None
+
+    def _requires_vision(self, messages: list) -> bool:
+        """
+        Best-effort detection of whether the request contains image/video parts and therefore
+        requires a vision-capable model.
+        """
+        try:
+            for msg in messages or []:
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content")
+                if not isinstance(content, list):
+                    continue
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    part_type = part.get("type")
+                    if part_type in ("image_url", "input_image", "video_url", "input_video"):
+                        return True
+                    # Some providers may omit type but include payload keys.
+                    if "image_url" in part or "video_url" in part:
+                        return True
+        except Exception:
+            return False
+        return False
+
+    def _select_client(self, messages: list) -> LLMClient:
+        if self._vision_client is not None and self._requires_vision(messages):
+            return self._vision_client
+        return self._vlm_client
 
     def reinitialize(self):
         """
@@ -102,8 +136,14 @@ class GlobalVLMClient:
                     logger.error("No vlm config found during reinitialize")
                     raise ValueError("No vlm config found")
                 new_client = LLMClient(llm_type=LLMType.CHAT, config=vlm_config)
-                old_client = self._vlm_client
+                vision_config = get_config("vision_model")
+                new_vision_client = (
+                    LLMClient(llm_type=LLMType.CHAT, config=vision_config)
+                    if vision_config
+                    else None
+                )
                 self._vlm_client = new_client
+                self._vision_client = new_vision_client
                 logger.info("GlobalVLMClient reinitialized successfully")
 
             except Exception as e:
@@ -114,7 +154,8 @@ class GlobalVLMClient:
     def generate_with_messages(
         self, messages: list, enable_executor: bool = True, max_calls: int = 5, **kwargs
     ):
-        response = self._vlm_client.generate_with_messages(messages, **kwargs)
+        client = self._select_client(messages)
+        response = client.generate_with_messages(messages, **kwargs)
         call_count = 0
         while enable_executor:
             call_count += 1
@@ -128,7 +169,8 @@ class GlobalVLMClient:
                         "content": f"System notice: Maximum tool call limit ({max_calls}) reached. Cannot execute more tool calls. Please answer the user's question directly without attempting more tool calls.",
                     }
                 )
-                response = self._vlm_client.generate_with_messages(messages, **kwargs)
+                client = self._select_client(messages)
+                response = client.generate_with_messages(messages, **kwargs)
                 break
             message = response.choices[0].message
             if not message.tool_calls:
@@ -168,7 +210,8 @@ class GlobalVLMClient:
                         "tool_call_id": tool_id,
                     }
                 )
-            response = self._vlm_client.generate_with_messages(messages, **kwargs)
+            client = self._select_client(messages)
+            response = client.generate_with_messages(messages, **kwargs)
 
         message = response.choices[0].message
         return message.content
@@ -176,7 +219,8 @@ class GlobalVLMClient:
     async def generate_with_messages_async(
         self, messages: list, enable_executor: bool = True, max_calls: int = 5, **kwargs
     ):
-        response = await self._vlm_client.generate_with_messages_async(messages, **kwargs)
+        client = self._select_client(messages)
+        response = await client.generate_with_messages_async(messages, **kwargs)
         call_count = 0
         while enable_executor:
             call_count += 1
@@ -188,7 +232,8 @@ class GlobalVLMClient:
                         "content": f"System notice: Maximum tool call limit ({max_calls}) reached. Cannot execute more tool calls. Please answer the user's question directly without attempting more tool calls.",
                     }
                 )
-                response = await self._vlm_client.generate_with_messages_async(messages, **kwargs)
+                client = self._select_client(messages)
+                response = await client.generate_with_messages_async(messages, **kwargs)
                 break
             message = response.choices[0].message
             if not message.tool_calls:
@@ -226,7 +271,8 @@ class GlobalVLMClient:
                 )
 
             # Call LLM again
-            response = await self._vlm_client.generate_with_messages_async(messages, **kwargs)
+            client = self._select_client(messages)
+            response = await client.generate_with_messages_async(messages, **kwargs)
 
         message = response.choices[0].message
         return message.content
@@ -243,7 +289,8 @@ class GlobalVLMClient:
         Returns:
             Raw LLM response object, including possible tool_calls
         """
-        response = await self._vlm_client.generate_with_messages_async(
+        client = self._select_client(messages)
+        response = await client.generate_with_messages_async(
             messages, tools=tools, **kwargs
         )
         return response
@@ -252,7 +299,8 @@ class GlobalVLMClient:
         """
         Agent-specific streaming generation method
         """
-        async for chunk in self._vlm_client._openai_chat_completion_stream_async(
+        client = self._select_client(messages)
+        async for chunk in client._openai_chat_completion_stream_async(
             messages, tools=tools, **kwargs
         ):
             yield chunk
